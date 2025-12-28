@@ -849,13 +849,15 @@ FLAGS:
   -help                 Show this help message
   -tools                Toggle tools on/off interactively
   -model [slug]         Switch model (interactive if no slug provided)
-  -endpoint [url]       Set API endpoint (for Ollama, etc.)
+  -ollama               Use local Ollama (no API key needed)
+  -openrouter           Use OpenRouter API (default)
+  -endpoint [url]       Set custom API endpoint
   -newtool <prompt>     Create a new custom tool via AI
   -rollback             Restore from last backup (before -newtool)
   -reset                Factory reset (wipes all config and custom tools)
 
 OLLAMA:
-  please -endpoint http://localhost:11434/v1/chat/completions
+  please -ollama
   please -model llama3.1
 
 TOOLS:`)
@@ -1382,12 +1384,18 @@ func main() {
 				// Show current endpoint
 				fmt.Printf("Current endpoint: %s\n", getEndpoint())
 				fmt.Println("\nUsage: please -endpoint <url>")
-				fmt.Println("\nExamples:")
-				fmt.Println("  please -endpoint http://localhost:11434/v1/chat/completions  # Ollama")
-				fmt.Println("  please -endpoint https://openrouter.ai/api/v1/chat/completions  # OpenRouter (default)")
+				fmt.Println("\nOr use shortcuts:")
+				fmt.Println("  please -ollama      # Use local Ollama")
+				fmt.Println("  please -openrouter  # Use OpenRouter (default)")
 				return
 			}
 			runEndpoint(os.Args[2])
+			return
+		case "-ollama":
+			runEndpoint("http://localhost:11434/v1/chat/completions")
+			return
+		case "-openrouter":
+			runEndpoint(openRouterURL)
 			return
 		}
 	}
