@@ -979,6 +979,71 @@ func runEndpoint(url string) {
 	}
 }
 
+func setupOllama() {
+	fmt.Println("Setting up Ollama...")
+
+	// Check if ollama is installed
+	if _, err := exec.LookPath("ollama"); err != nil {
+		fmt.Println("Ollama not found. Installing via Homebrew...")
+		cmd := exec.Command("brew", "install", "ollama")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("Error installing ollama: %v\n", err)
+			fmt.Println("\nPlease install manually: brew install ollama")
+			os.Exit(1)
+		}
+		fmt.Println("Ollama installed successfully!")
+	} else {
+		fmt.Println("✓ Ollama is installed")
+	}
+
+	// Start ollama service if not running
+	fmt.Println("Starting Ollama service...")
+	startCmd := exec.Command("brew", "services", "start", "ollama")
+	startCmd.Run() // Ignore error - might already be running
+
+	// Wait a moment for service to start
+	time.Sleep(2 * time.Second)
+
+	// Check if llama3.1 model is available
+	listCmd := exec.Command("ollama", "list")
+	output, err := listCmd.Output()
+	if err != nil || !strings.Contains(string(output), "llama3.1") {
+		fmt.Println("Pulling llama3.1 model (this may take a few minutes)...")
+		pullCmd := exec.Command("ollama", "pull", "llama3.1")
+		pullCmd.Stdout = os.Stdout
+		pullCmd.Stderr = os.Stderr
+		if err := pullCmd.Run(); err != nil {
+			fmt.Printf("Error pulling model: %v\n", err)
+			fmt.Println("\nPlease pull manually: ollama pull llama3.1")
+			os.Exit(1)
+		}
+		fmt.Println("Model pulled successfully!")
+	} else {
+		fmt.Println("✓ llama3.1 model is available")
+	}
+
+	// Set config for Ollama
+	config, _ := loadConfig()
+	if config == nil {
+		config = &Config{}
+	}
+	config.Endpoint = "http://localhost:11434/v1/chat/completions"
+	config.Model = "llama3.1"
+
+	if err := saveConfig(config); err != nil {
+		fmt.Printf("Error saving config: %v\n", err)
+		os.Exit(1)
+	}
+	addModelToHistory("llama3.1")
+
+	fmt.Println("\n✓ Ollama setup complete!")
+	fmt.Println("  Endpoint: http://localhost:11434/v1/chat/completions")
+	fmt.Println("  Model: llama3.1")
+	fmt.Println("\nYou can now use: please <your prompt>")
+}
+
 func runModel(slug string) {
 	config, _ := loadConfig()
 	if config == nil {
@@ -1392,7 +1457,7 @@ func main() {
 			runEndpoint(os.Args[2])
 			return
 		case "-ollama":
-			runEndpoint("http://localhost:11434/v1/chat/completions")
+			setupOllama()
 			return
 		case "-openrouter":
 			runEndpoint(openRouterURL)
