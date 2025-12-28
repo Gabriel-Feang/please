@@ -7,7 +7,7 @@ A fast, agentic terminal assistant powered by AI. Just ask it to do things.
 ### Homebrew (macOS/Linux)
 
 ```bash
-brew tap feang/tap
+brew tap Gabriel-Feang/tap
 brew install please
 ```
 
