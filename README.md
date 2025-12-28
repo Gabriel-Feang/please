@@ -19,7 +19,15 @@ go install github.com/Gabriel-Feang/please@latest
 
 ## Setup
 
-Configure your OpenRouter API key:
+### Option 1: Local AI with Ollama (no API key needed)
+
+```bash
+please -ollama
+```
+
+This will install Ollama, pull the llama3.1 model, and configure everything automatically.
+
+### Option 2: Cloud AI with OpenRouter
 
 ```bash
 please -setup
@@ -63,11 +71,38 @@ pls
 please> I wouldn't want to lose any files, can you help?
 ```
 
+### Image analysis (vision models)
+
+Include image paths in your prompt to analyze images with vision-capable models:
+
+```bash
+# Quoted path (best for paths with spaces)
+pls '"/Users/me/Downloads/screenshot.png" what does this show?'
+
+# Escaped spaces
+pls /path/to/my\ image.png describe this
+
+# Simple paths
+pls ~/photo.jpg what's in this picture?
+pls ./diagram.png explain this architecture
+```
+
+Supported formats: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`
+
+**Note:** Requires a vision-capable model. For Ollama, use models like `qwen2-vl`, `llava`, or `llama3.2-vision`:
+
+```bash
+please -model qwen2-vl
+pls ~/photo.jpg what do you see?
+```
+
 ## Commands
 
 | Command | Description |
 |---------|-------------|
 | `please -setup` | Configure your OpenRouter API key |
+| `please -ollama` | Set up local Ollama (auto-installs if needed) |
+| `please -openrouter` | Switch back to OpenRouter cloud |
 | `please -help` | Show help and available tools |
 | `please -tools` | Toggle tools on/off interactively |
 | `please -model [slug]` | Switch AI model (interactive if no slug) |
