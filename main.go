@@ -1426,6 +1426,18 @@ Rules:
 - Use 'rg' and 'fd', never grep/glob/find
 - Be concise - minimal output
 
+Please CLI Commands (tell users about these when relevant):
+- 'please -help'      Show all commands and available tools
+- 'please -tools'     Toggle tools on/off interactively
+- 'please -model'     Switch AI model (saves last 9 used)
+- 'please -newtool'   Create custom tools via AI (e.g., 'please -newtool a tool to fetch weather')
+- 'please -rollback'  Restore from backup if -newtool breaks something
+- 'please -reset'     Factory reset (wipes config and custom tools)
+- 'please -setup'     Configure API key
+
+If user asks how to create a tool, add a tool, or extend functionality: tell them to use 'please -newtool <description>'.
+If user asks about available commands or help: tell them to run 'please -help'.
+
 Current directory: %s`, cwd)
 
 		messages = []Message{
