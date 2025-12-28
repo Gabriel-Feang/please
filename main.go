@@ -80,6 +80,7 @@ type Config struct {
 	Model         string          `json:"model,omitempty"`
 	ModelHistory  []string        `json:"model_history,omitempty"`
 	DisabledTools map[string]bool `json:"disabled_tools,omitempty"`
+	Endpoint      string          `json:"endpoint,omitempty"` // Custom API endpoint (for Ollama, etc.)
 }
 
 func loadConfig() (*Config, error) {
@@ -124,6 +125,18 @@ func getModel() string {
 		return config.Model
 	}
 	return defaultModel
+}
+
+func getEndpoint() string {
+	if config, err := loadConfig(); err == nil && config.Endpoint != "" {
+		return config.Endpoint
+	}
+	return openRouterURL
+}
+
+func isOllama() bool {
+	endpoint := getEndpoint()
+	return strings.Contains(endpoint, "localhost") || strings.Contains(endpoint, "127.0.0.1")
 }
 
 func addModelToHistory(modelSlug string) {
@@ -666,15 +679,19 @@ func sendStreamingRequest(messages []Message, apiKey string, spinner *Spinner) (
 		return nil, err
 	}
 
-	httpReq, err := http.NewRequest("POST", openRouterURL, bytes.NewReader(body))
+	endpoint := getEndpoint()
+	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	httpReq.Header.Set("HTTP-Referer", "https://github.com/Gabriel-Feang/please")
-	httpReq.Header.Set("X-Title", "please")
+	if !isOllama() {
+		// Only set auth headers for remote APIs
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+		httpReq.Header.Set("HTTP-Referer", "https://github.com/Gabriel-Feang/please")
+		httpReq.Header.Set("X-Title", "please")
+	}
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
@@ -832,9 +849,14 @@ FLAGS:
   -help                 Show this help message
   -tools                Toggle tools on/off interactively
   -model [slug]         Switch model (interactive if no slug provided)
+  -endpoint [url]       Set API endpoint (for Ollama, etc.)
   -newtool <prompt>     Create a new custom tool via AI
   -rollback             Restore from last backup (before -newtool)
   -reset                Factory reset (wipes all config and custom tools)
+
+OLLAMA:
+  please -endpoint http://localhost:11434/v1/chat/completions
+  please -model llama3.1
 
 TOOLS:`)
 	for _, t := range tools {
@@ -929,6 +951,29 @@ func runTools() {
 			printTools()
 			fmt.Println()
 		}
+	}
+}
+
+func runEndpoint(url string) {
+	config, _ := loadConfig()
+	if config == nil {
+		config = &Config{}
+	}
+
+	config.Endpoint = url
+	if err := saveConfig(config); err != nil {
+		fmt.Printf("Error saving config: %v\n", err)
+		os.Exit(1)
+	}
+
+	if isOllama() {
+		fmt.Printf("Endpoint set to: %s (Ollama mode - no API key needed)\n", url)
+		fmt.Println("\nMake sure Ollama is running with a model that supports tools:")
+		fmt.Println("  ollama run llama3.1")
+		fmt.Println("  ollama run qwen2.5")
+		fmt.Println("  ollama run mistral")
+	} else {
+		fmt.Printf("Endpoint set to: %s\n", url)
 	}
 }
 
@@ -1332,13 +1377,26 @@ func main() {
 			}
 			runNewtool(strings.Join(os.Args[2:], " "))
 			return
+		case "-endpoint":
+			if len(os.Args) < 3 {
+				// Show current endpoint
+				fmt.Printf("Current endpoint: %s\n", getEndpoint())
+				fmt.Println("\nUsage: please -endpoint <url>")
+				fmt.Println("\nExamples:")
+				fmt.Println("  please -endpoint http://localhost:11434/v1/chat/completions  # Ollama")
+				fmt.Println("  please -endpoint https://openrouter.ai/api/v1/chat/completions  # OpenRouter (default)")
+				return
+			}
+			runEndpoint(os.Args[2])
+			return
 		}
 	}
 
 	apiKey := getAPIKey()
-	if apiKey == "" {
+	if apiKey == "" && !isOllama() {
 		fmt.Println("Error: No API key configured")
 		fmt.Println("Run 'please -setup' to configure your OpenRouter API key")
+		fmt.Println("Or use Ollama: please -endpoint http://localhost:11434/v1/chat/completions")
 		os.Exit(1)
 	}
 
