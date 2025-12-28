@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,173 @@ const defaultModel = "anthropic/claude-3.5-sonnet"
 const maxIterations = 20
 const sessionTimeout = 5 * time.Minute
 const maxModelHistory = 9
+
+// Image extensions we support
+var imageExtensions = []string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+
+// Patterns for finding image paths in text
+var (
+	// Quoted paths: "path" or 'path'
+	quotedPathPattern = regexp.MustCompile(`["']([^"']+\.(?:png|jpg|jpeg|gif|webp|bmp))["']`)
+	// Absolute paths with possible escaped spaces: /path/to/file.png or /path/to/file\ name.png
+	absolutePathPattern = regexp.MustCompile(`(/(?:[^\s\\]|\\ )+\.(?:png|jpg|jpeg|gif|webp|bmp))`)
+	// Home paths: ~/path/to/file.png
+	homePathPattern = regexp.MustCompile(`(~(?:[^\s\\]|\\ )+\.(?:png|jpg|jpeg|gif|webp|bmp))`)
+)
+
+// isImagePath checks if a path points to an image file
+func isImagePath(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	for _, imgExt := range imageExtensions {
+		if ext == imgExt {
+			return true
+		}
+	}
+	return false
+}
+
+// expandPath expands ~ and cleans the path
+func expandPath(path string) string {
+	if strings.HasPrefix(path, "~") {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, path[1:])
+	}
+	// Handle escaped spaces (backslash before space)
+	path = strings.ReplaceAll(path, "\\ ", " ")
+	return filepath.Clean(path)
+}
+
+// extractImagesFromPrompt finds image paths in the prompt and returns the cleaned text + image paths
+func extractImagesFromPrompt(prompt string) (string, []string) {
+	var images []string
+	var pathsToRemove []string
+
+	// Try quoted paths first (most reliable)
+	for _, match := range quotedPathPattern.FindAllStringSubmatch(prompt, -1) {
+		if len(match) > 1 {
+			path := match[1]
+			expanded := expandPath(path)
+			if _, err := os.Stat(expanded); err == nil {
+				images = append(images, expanded)
+				pathsToRemove = append(pathsToRemove, match[0]) // Include quotes
+			}
+		}
+	}
+
+	// Try absolute paths with escaped spaces
+	for _, match := range absolutePathPattern.FindAllStringSubmatch(prompt, -1) {
+		if len(match) > 1 {
+			path := match[1]
+			expanded := expandPath(path)
+			// Skip if already found via quoted path
+			alreadyFound := false
+			for _, img := range images {
+				if img == expanded {
+					alreadyFound = true
+					break
+				}
+			}
+			if !alreadyFound {
+				if _, err := os.Stat(expanded); err == nil {
+					images = append(images, expanded)
+					pathsToRemove = append(pathsToRemove, match[1])
+				}
+			}
+		}
+	}
+
+	// Try home paths
+	for _, match := range homePathPattern.FindAllStringSubmatch(prompt, -1) {
+		if len(match) > 1 {
+			path := match[1]
+			expanded := expandPath(path)
+			alreadyFound := false
+			for _, img := range images {
+				if img == expanded {
+					alreadyFound = true
+					break
+				}
+			}
+			if !alreadyFound {
+				if _, err := os.Stat(expanded); err == nil {
+					images = append(images, expanded)
+					pathsToRemove = append(pathsToRemove, match[1])
+				}
+			}
+		}
+	}
+
+	// Remove found paths from prompt
+	cleanedPrompt := prompt
+	for _, p := range pathsToRemove {
+		cleanedPrompt = strings.Replace(cleanedPrompt, p, "", 1)
+	}
+
+	return strings.TrimSpace(cleanedPrompt), images
+}
+
+// encodeImageToBase64 reads an image file and returns a data URI
+func encodeImageToBase64(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+
+	// Determine MIME type from extension
+	ext := strings.ToLower(filepath.Ext(path))
+	var mimeType string
+	switch ext {
+	case ".png":
+		mimeType = "image/png"
+	case ".jpg", ".jpeg":
+		mimeType = "image/jpeg"
+	case ".gif":
+		mimeType = "image/gif"
+	case ".webp":
+		mimeType = "image/webp"
+	case ".bmp":
+		mimeType = "image/bmp"
+	default:
+		mimeType = "image/png" // Default fallback
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(data)
+	return fmt.Sprintf("data:%s;base64,%s", mimeType, encoded), nil
+}
+
+// createMultimodalMessage creates a message with text and images
+func createMultimodalMessage(text string, imagePaths []string) Message {
+	if len(imagePaths) == 0 {
+		return Message{Role: "user", Content: text}
+	}
+
+	parts := []ContentPart{}
+
+	// Add text part first (if not empty)
+	if text != "" {
+		parts = append(parts, ContentPart{Type: "text", Text: text})
+	}
+
+	// Add image parts
+	for _, imgPath := range imagePaths {
+		dataURI, err := encodeImageToBase64(imgPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: couldn't read image %s: %v\n", imgPath, err)
+			continue
+		}
+		parts = append(parts, ContentPart{
+			Type:     "image_url",
+			ImageURL: &ImageURL{URL: dataURI},
+		})
+	}
+
+	// If we only have text (images failed to load), return simple message
+	if len(parts) == 1 && parts[0].Type == "text" {
+		return Message{Role: "user", Content: text}
+	}
+
+	return Message{Role: "user", ContentParts: parts}
+}
 
 // Spinner for loading states
 type Spinner struct {
@@ -246,12 +415,81 @@ func clearSession() {
 	os.Remove(sessionFile)
 }
 
+// ContentPart represents a part of multimodal content (text or image)
+type ContentPart struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+type ImageURL struct {
+	URL string `json:"url"`
+}
+
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Name       string     `json:"name,omitempty"`
+	Role         string        `json:"role"`
+	Content      string        `json:"-"` // Used internally, marshaled via custom method
+	ContentParts []ContentPart `json:"-"` // For multimodal messages
+	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID   string        `json:"tool_call_id,omitempty"`
+	Name         string        `json:"name,omitempty"`
+}
+
+// MarshalJSON custom marshals Message to handle both string and array content
+func (m Message) MarshalJSON() ([]byte, error) {
+	type Alias Message
+	aux := struct {
+		Content interface{} `json:"content,omitempty"`
+		Alias
+	}{
+		Alias: Alias(m),
+	}
+
+	if len(m.ContentParts) > 0 {
+		aux.Content = m.ContentParts
+	} else if m.Content != "" {
+		aux.Content = m.Content
+	}
+
+	return json.Marshal(aux)
+}
+
+// UnmarshalJSON custom unmarshals Message to handle both string and array content
+func (m *Message) UnmarshalJSON(data []byte) error {
+	type Alias Message
+	aux := struct {
+		Content json.RawMessage `json:"content"`
+		*Alias
+	}{
+		Alias: (*Alias)(m),
+	}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	if len(aux.Content) > 0 {
+		// Try to unmarshal as string first
+		var str string
+		if err := json.Unmarshal(aux.Content, &str); err == nil {
+			m.Content = str
+			return nil
+		}
+
+		// Try as array of content parts
+		var parts []ContentPart
+		if err := json.Unmarshal(aux.Content, &parts); err == nil {
+			m.ContentParts = parts
+			// Extract text content for convenience
+			for _, p := range parts {
+				if p.Type == "text" {
+					m.Content += p.Text
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 type ToolCall struct {
@@ -1505,7 +1743,12 @@ func main() {
 		}
 
 		messages = session.Messages
-		messages = append(messages, Message{Role: "user", Content: prompt})
+		// Extract images from prompt and create appropriate message
+		cleanedPrompt, imagePaths := extractImagesFromPrompt(prompt)
+		if len(imagePaths) > 0 {
+			fmt.Printf("\033[90m> Attaching %d image(s)\033[0m\n", len(imagePaths))
+		}
+		messages = append(messages, createMultimodalMessage(cleanedPrompt, imagePaths))
 
 	} else {
 		// New session mode
@@ -1543,6 +1786,12 @@ func main() {
 		// Clear any existing session
 		clearSession()
 
+		// Extract images from prompt
+		cleanedPrompt, imagePaths := extractImagesFromPrompt(prompt)
+		if len(imagePaths) > 0 {
+			fmt.Printf("\033[90m> Attaching %d image(s)\033[0m\n", len(imagePaths))
+		}
+
 		systemPrompt := fmt.Sprintf(`You are a helpful terminal assistant with full shell access.
 
 Tools:
@@ -1573,7 +1822,7 @@ Current directory: %s`, cwd)
 
 		messages = []Message{
 			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: prompt},
+			createMultimodalMessage(cleanedPrompt, imagePaths),
 		}
 	}
 
