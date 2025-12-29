@@ -343,15 +343,15 @@ func addModelToHistory(modelSlug string) {
 }
 
 func runSetup() {
-	fmt.Println("please setup")
-	fmt.Println("------------")
+	fmt.Println(bold("please setup"))
+	fmt.Println(muted("─────────────"))
 	fmt.Print("Enter your OpenRouter API key: ")
 
 	var apiKey string
 	fmt.Scanln(&apiKey)
 
 	if apiKey == "" {
-		fmt.Println("No API key provided. Setup cancelled.")
+		fmt.Println(warn("No API key provided. Setup cancelled."))
 		os.Exit(1)
 	}
 
@@ -363,11 +363,11 @@ func runSetup() {
 	config.APIKey = apiKey
 
 	if err := saveConfig(config); err != nil {
-		fmt.Printf("Error saving config: %v\n", err)
+		fmt.Println(errorf("Error saving config: " + err.Error()))
 		os.Exit(1)
 	}
 
-	fmt.Println("API key saved to ~/.please/config.json")
+	fmt.Println(success("API key saved to ~/.please/config.json"))
 }
 
 type Session struct {
@@ -712,7 +712,6 @@ func executeTool(name string, argsJSON string) string {
 	switch name {
 	case "ask_user":
 		question := args["question"].(string)
-		fmt.Printf("\n\033[1;36m%s\033[0m\n\n", question)
 
 		options := []string{}
 		if opt, ok := args["option1"].(string); ok && opt != "" {
@@ -724,82 +723,36 @@ func executeTool(name string, argsJSON string) string {
 		if opt, ok := args["option3"].(string); ok && opt != "" {
 			options = append(options, opt)
 		}
+		options = append(options, "Other...")
 
-		// Show options 1-3, option 4 is always "Other"
-		for i, opt := range options {
-			fmt.Printf("  \033[1;33m%d)\033[0m %s\n", i+1, opt)
+		selected := RunSelector(question, options)
+
+		if selected == -1 {
+			fmt.Println(muted("Cancelled."))
+			os.Exit(0)
 		}
-		fmt.Printf("  \033[1;33m4)\033[0m Other...\n")
-		fmt.Println()
-		fmt.Print("\033[90m[1-3: select, 4: other, q/esc/enter: cancel]\033[0m ")
 
-		// Read single character
-		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-		if err != nil {
-			// Fallback to line-based input
+		// "Other" option selected
+		if selected == len(options)-1 {
+			fmt.Print(muted("Your response: "))
 			reader := bufio.NewReader(os.Stdin)
-			input, _ := reader.ReadString('\n')
-			input = strings.TrimSpace(input)
-			if input == "q" || input == "" {
-				fmt.Println("\nCancelled.")
-				os.Exit(0)
+			input, err := reader.ReadString('\n')
+			if err != nil {
+				return "Error reading input"
 			}
-			if len(input) == 1 && input[0] >= '1' && input[0] <= '3' {
-				idx := int(input[0] - '1')
-				if idx < len(options) {
-					return fmt.Sprintf("User selected: %s", options[idx])
-				}
+			input = strings.TrimSpace(input)
+			if input == "" {
+				fmt.Println(muted("Cancelled."))
+				os.Exit(0)
 			}
 			return fmt.Sprintf("User response: %s", input)
 		}
-		defer term.Restore(int(os.Stdin.Fd()), oldState)
 
-		for {
-			var buf [1]byte
-			os.Stdin.Read(buf[:])
-			ch := buf[0]
-
-			// q, space, enter, or esc - quit
-			if ch == 'q' || ch == ' ' || ch == '\r' || ch == '\n' || ch == 27 {
-				term.Restore(int(os.Stdin.Fd()), oldState)
-				fmt.Println("\nCancelled.")
-				os.Exit(0)
-			}
-
-			// 1, 2, 3 - select option directly
-			if ch >= '1' && ch <= '3' {
-				idx := int(ch - '1')
-				if idx < len(options) {
-					term.Restore(int(os.Stdin.Fd()), oldState)
-					fmt.Printf("%c\n", ch)
-					return fmt.Sprintf("User selected: %s", options[idx])
-				}
-			}
-
-			// 4 - other, prompt for custom input
-			if ch == '4' {
-				term.Restore(int(os.Stdin.Fd()), oldState)
-				fmt.Println("4")
-				fmt.Print("Type your response: ")
-				reader := bufio.NewReader(os.Stdin)
-				input, err := reader.ReadString('\n')
-				if err != nil {
-					return "Error reading input"
-				}
-				input = strings.TrimSpace(input)
-				if input == "" {
-					fmt.Println("Cancelled.")
-					os.Exit(0)
-				}
-				return fmt.Sprintf("User response: %s", input)
-			}
-
-			// Any other key - ignore, keep waiting
-		}
+		return fmt.Sprintf("User selected: %s", options[selected])
 
 	case "execute_command":
 		cmdStr := args["command"].(string)
-		fmt.Printf("\033[90m> %s\033[0m\n", cmdStr)
+		fmt.Println(toolPrefixStyle.Render("> " + cmdStr))
 
 		cmd := exec.Command("bash", "-c", cmdStr)
 		stdout, err := cmd.StdoutPipe()
@@ -827,7 +780,7 @@ func executeTool(name string, argsJSON string) string {
 			scanner.Buffer(buf, 1024*1024)
 			for scanner.Scan() {
 				line := scanner.Text()
-				fmt.Printf("\033[90m  %s\033[0m\n", line)
+				fmt.Println(toolOutputStyle.Render("  " + line))
 				mu.Lock()
 				output.WriteString(line + "\n")
 				mu.Unlock()
@@ -848,7 +801,7 @@ func executeTool(name string, argsJSON string) string {
 
 	case "read_file":
 		path := args["path"].(string)
-		fmt.Printf("\033[90m> read: %s\033[0m\n", path)
+		fmt.Println(toolPrefixStyle.Render("> read: " + path))
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Sprintf("Error: %v", err)
@@ -858,7 +811,7 @@ func executeTool(name string, argsJSON string) string {
 	case "write_file":
 		path := args["path"].(string)
 		content := args["content"].(string)
-		fmt.Printf("\033[90m> write: %s\033[0m\n", path)
+		fmt.Println(toolPrefixStyle.Render("> write: " + path))
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			return fmt.Sprintf("Error creating directory: %v", err)
 		}
@@ -869,7 +822,7 @@ func executeTool(name string, argsJSON string) string {
 
 	case "list_files":
 		path := args["path"].(string)
-		fmt.Printf("\033[90m> ls: %s\033[0m\n", path)
+		fmt.Println(toolPrefixStyle.Render("> ls: " + path))
 		out, err := exec.Command("ls", "-la", path).CombinedOutput()
 		if err != nil {
 			return string(out) + "\nError: " + err.Error()
@@ -882,7 +835,7 @@ func executeTool(name string, argsJSON string) string {
 		if p, ok := args["path"].(string); ok && p != "" {
 			path = p
 		}
-		fmt.Printf("\033[90m> rg: %s in %s\033[0m\n", pattern, path)
+		fmt.Println(toolPrefixStyle.Render(fmt.Sprintf("> rg: %s in %s", pattern, path)))
 		out, _ := exec.Command("rg", "--color=never", "-n", pattern, path).CombinedOutput()
 		return string(out)
 
@@ -895,7 +848,7 @@ func executeTool(name string, argsJSON string) string {
 		if d, ok := args["depth"].(float64); ok {
 			depth = fmt.Sprintf("%d", int(d))
 		}
-		fmt.Printf("\033[90m> tree: %s (depth %s)\033[0m\n", path, depth)
+		fmt.Println(toolPrefixStyle.Render(fmt.Sprintf("> tree: %s (depth %s)", path, depth)))
 		out, _ := exec.Command("tree", "-L", depth, path).CombinedOutput()
 		return string(out)
 
@@ -1075,49 +1028,50 @@ func runAgent(messages []Message, apiKey string, cwd string) []Message {
 }
 
 func runHelp() {
-	fmt.Println(`please - A fast, agentic terminal assistant powered by AI
+	title := boldStyle.Render("please") + muted(" - A fast, agentic terminal assistant powered by AI")
+	fmt.Println(title)
+	fmt.Println()
 
-USAGE:
-  please <prompt>       Start a new conversation
-  hmm <follow-up>       Continue the last conversation
-  pls / plz             Aliases for 'please'
+	fmt.Println(boldStyle.Render("USAGE"))
+	fmt.Printf("  %s       Start a new conversation\n", primaryStyle.Render("please <prompt>"))
+	fmt.Printf("  %s       Continue the last conversation\n", primaryStyle.Render("hmm <follow-up>"))
+	fmt.Printf("  %s             Aliases for 'please'\n", muted("pls / plz"))
+	fmt.Println()
 
-FLAGS:
-  -setup                Configure your OpenRouter API key
-  -help                 Show this help message
-  -tools                Toggle tools on/off interactively
-  -model [slug]         Switch model (interactive if no slug provided)
-  -ollama               Use local Ollama (no API key needed)
-  -openrouter           Use OpenRouter API (default)
-  -endpoint [url]       Set custom API endpoint
-  -newtool <prompt>     Create a new custom tool via AI
-  -rollback             Restore from last backup (before -newtool)
-  -reset                Factory reset (wipes all config and custom tools)
+	fmt.Println(boldStyle.Render("FLAGS"))
+	fmt.Printf("  %s                %s\n", code("-setup"), "Configure your OpenRouter API key")
+	fmt.Printf("  %s                 %s\n", code("-help"), "Show this help message")
+	fmt.Printf("  %s                %s\n", code("-tools"), "Toggle tools on/off interactively")
+	fmt.Printf("  %s         %s\n", code("-model [slug]"), "Switch model (interactive if no slug)")
+	fmt.Printf("  %s               %s\n", code("-ollama"), "Use local Ollama (no API key needed)")
+	fmt.Printf("  %s           %s\n", code("-openrouter"), "Use OpenRouter API (default)")
+	fmt.Printf("  %s       %s\n", code("-endpoint [url]"), "Set custom API endpoint")
+	fmt.Printf("  %s     %s\n", code("-newtool <prompt>"), "Create a new custom tool via AI")
+	fmt.Printf("  %s             %s\n", code("-rollback"), "Restore from last backup")
+	fmt.Printf("  %s                %s\n", code("-reset"), "Factory reset (wipes all config)")
+	fmt.Println()
 
-OLLAMA:
-  please -ollama
-  please -model llama3.1
-
-TOOLS:`)
+	fmt.Println(boldStyle.Render("TOOLS"))
 	for _, t := range tools {
-		fmt.Printf("  %-18s %s\n", t.Function.Name, t.Function.Description)
+		fmt.Printf("  %s  %s\n", primaryStyle.Render(fmt.Sprintf("%-16s", t.Function.Name)), muted(t.Function.Description))
 	}
 	if len(userTools) > 0 {
-		fmt.Println("\nCUSTOM TOOLS:")
+		fmt.Println()
+		fmt.Println(boldStyle.Render("CUSTOM TOOLS"))
 		for _, t := range userTools {
-			fmt.Printf("  %-18s %s\n", t.Function.Name, t.Function.Description)
+			fmt.Printf("  %s  %s\n", primaryStyle.Render(fmt.Sprintf("%-16s", t.Function.Name)), muted(t.Function.Description))
 		}
 	}
-	fmt.Println(`
-EXAMPLES:
-  please list all large files in this directory
-  please what processes are using port 3000
-  hmm now kill those processes
+	fmt.Println()
 
-CONFIG:
-  ~/.please/config.json   API key, model, disabled tools
+	fmt.Println(boldStyle.Render("EXAMPLES"))
+	fmt.Printf("  %s\n", code("please list all large files in this directory"))
+	fmt.Printf("  %s\n", code("please what processes are using port 3000"))
+	fmt.Printf("  %s\n", code("hmm now kill those processes"))
+	fmt.Println()
 
-Get your API key at: https://openrouter.ai/keys`)
+	fmt.Println(muted("Config: ~/.please/config.json"))
+	fmt.Println(muted("API key: https://openrouter.ai/keys"))
 }
 
 func runTools() {
@@ -1133,65 +1087,35 @@ func runTools() {
 	allTools := append([]Tool{}, tools...)
 	allTools = append(allTools, userTools...)
 
-	fmt.Println("Toggle tools on/off (press number to toggle, q/esc/enter to save and exit)")
-	fmt.Println()
-
-	printTools := func() {
-		for i, t := range allTools {
-			status := "\033[32m✓\033[0m"
-			if config.DisabledTools[t.Function.Name] {
-				status = "\033[90m✗\033[0m"
-			}
-			// Mark custom tools
-			marker := ""
-			if i >= len(tools) {
-				marker = " \033[36m(custom)\033[0m"
-			}
-			fmt.Printf("  %d) [%s] %-18s %s%s\n", i+1, status, t.Function.Name, t.Function.Description, marker)
+	// Build toggle items
+	items := make([]toggleItem, len(allTools))
+	for i, t := range allTools {
+		desc := t.Function.Description
+		if i >= len(tools) {
+			desc += " (custom)"
+		}
+		items[i] = toggleItem{
+			name:    t.Function.Name,
+			desc:    desc,
+			enabled: !config.DisabledTools[t.Function.Name],
 		}
 	}
 
-	printTools()
-	fmt.Println()
+	// Run interactive toggle
+	result := RunToggleList("Toggle Tools", items)
 
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
-		fmt.Println("Error: terminal not supported")
-		return
-	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState)
-
-	for {
-		var buf [1]byte
-		os.Stdin.Read(buf[:])
-		ch := buf[0]
-
-		// Exit keys
-		if ch == 'q' || ch == 27 || ch == '\r' || ch == '\n' {
-			term.Restore(int(os.Stdin.Fd()), oldState)
-			saveConfig(config)
-			fmt.Println("\nSaved!")
-			return
-		}
-
-		// Toggle tool by number (1-9 and a-z for more)
-		idx := -1
-		if ch >= '1' && ch <= '9' {
-			idx = int(ch - '1')
-		} else if ch >= 'a' && ch <= 'z' {
-			idx = int(ch-'a') + 9
-		}
-
-		if idx >= 0 && idx < len(allTools) {
-			name := allTools[idx].Function.Name
-			config.DisabledTools[name] = !config.DisabledTools[name]
-			// Redraw
-			fmt.Print("\033[" + fmt.Sprintf("%d", len(allTools)+1) + "A") // Move up
-			fmt.Print("\033[J") // Clear below
-			printTools()
-			fmt.Println()
+	// Update config with results
+	for i, item := range result {
+		name := allTools[i].Function.Name
+		if item.enabled {
+			delete(config.DisabledTools, name)
+		} else {
+			config.DisabledTools[name] = true
 		}
 	}
+
+	saveConfig(config)
+	fmt.Println(success("Saved!"))
 }
 
 func runEndpoint(url string) {
@@ -1202,42 +1126,44 @@ func runEndpoint(url string) {
 
 	config.Endpoint = url
 	if err := saveConfig(config); err != nil {
-		fmt.Printf("Error saving config: %v\n", err)
+		fmt.Println(errorf("Error saving config: " + err.Error()))
 		os.Exit(1)
 	}
 
 	if isOllama() {
-		fmt.Printf("Endpoint set to: %s (Ollama mode - no API key needed)\n", url)
-		fmt.Println("\nMake sure Ollama is running with a model that supports tools:")
-		fmt.Println("  ollama run llama3.1")
-		fmt.Println("  ollama run qwen2.5")
-		fmt.Println("  ollama run mistral")
+		fmt.Println(success("Endpoint set to: " + url))
+		fmt.Println(muted("Ollama mode - no API key needed"))
+		fmt.Println()
+		fmt.Println(muted("Make sure Ollama is running with a model that supports tools:"))
+		fmt.Println(muted("  ollama run llama3.1"))
+		fmt.Println(muted("  ollama run qwen2.5"))
+		fmt.Println(muted("  ollama run mistral"))
 	} else {
-		fmt.Printf("Endpoint set to: %s\n", url)
+		fmt.Println(success("Endpoint set to: " + url))
 	}
 }
 
 func setupOllama() {
-	fmt.Println("Setting up Ollama...")
+	fmt.Println(bold("Setting up Ollama..."))
 
 	// Check if ollama is installed
 	if _, err := exec.LookPath("ollama"); err != nil {
-		fmt.Println("Ollama not found. Installing via Homebrew...")
+		fmt.Println(muted("Ollama not found. Installing via Homebrew..."))
 		cmd := exec.Command("brew", "install", "ollama")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			fmt.Printf("Error installing ollama: %v\n", err)
-			fmt.Println("\nPlease install manually: brew install ollama")
+			fmt.Println(errorf("Error installing ollama: " + err.Error()))
+			fmt.Println(muted("Please install manually: brew install ollama"))
 			os.Exit(1)
 		}
-		fmt.Println("Ollama installed successfully!")
+		fmt.Println(success("Ollama installed!"))
 	} else {
-		fmt.Println("✓ Ollama is installed")
+		fmt.Println(success("✓ Ollama is installed"))
 	}
 
 	// Start ollama service if not running
-	fmt.Println("Starting Ollama service...")
+	fmt.Println(muted("Starting Ollama service..."))
 	startCmd := exec.Command("brew", "services", "start", "ollama")
 	startCmd.Run() // Ignore error - might already be running
 
@@ -1248,18 +1174,18 @@ func setupOllama() {
 	listCmd := exec.Command("ollama", "list")
 	output, err := listCmd.Output()
 	if err != nil || !strings.Contains(string(output), "llama3.1") {
-		fmt.Println("Pulling llama3.1 model (this may take a few minutes)...")
+		fmt.Println(muted("Pulling llama3.1 model (this may take a few minutes)..."))
 		pullCmd := exec.Command("ollama", "pull", "llama3.1")
 		pullCmd.Stdout = os.Stdout
 		pullCmd.Stderr = os.Stderr
 		if err := pullCmd.Run(); err != nil {
-			fmt.Printf("Error pulling model: %v\n", err)
-			fmt.Println("\nPlease pull manually: ollama pull llama3.1")
+			fmt.Println(errorf("Error pulling model: " + err.Error()))
+			fmt.Println(muted("Please pull manually: ollama pull llama3.1"))
 			os.Exit(1)
 		}
-		fmt.Println("Model pulled successfully!")
+		fmt.Println(success("Model pulled!"))
 	} else {
-		fmt.Println("✓ llama3.1 model is available")
+		fmt.Println(success("✓ llama3.1 model is available"))
 	}
 
 	// Set config for Ollama
@@ -1271,15 +1197,17 @@ func setupOllama() {
 	config.Model = "llama3.1"
 
 	if err := saveConfig(config); err != nil {
-		fmt.Printf("Error saving config: %v\n", err)
+		fmt.Println(errorf("Error saving config: " + err.Error()))
 		os.Exit(1)
 	}
 	addModelToHistory("llama3.1")
 
-	fmt.Println("\n✓ Ollama setup complete!")
-	fmt.Println("  Endpoint: http://localhost:11434/v1/chat/completions")
-	fmt.Println("  Model: llama3.1")
-	fmt.Println("\nYou can now use: please <your prompt>")
+	fmt.Println()
+	fmt.Println(success("✓ Ollama setup complete!"))
+	fmt.Println(muted("  Endpoint: http://localhost:11434/v1/chat/completions"))
+	fmt.Println(muted("  Model: llama3.1"))
+	fmt.Println()
+	fmt.Println("You can now use: " + code("please <your prompt>"))
 }
 
 func runModel(slug string) {
@@ -1291,63 +1219,30 @@ func runModel(slug string) {
 	if slug != "" {
 		// Direct model switch
 		addModelToHistory(slug)
-		fmt.Printf("Switched to model: %s\n", slug)
+		fmt.Println(success("Switched to model: " + slug))
 		return
 	}
 
 	// Interactive mode
-	fmt.Println("Select a model (press number, 0 to keep current, q/esc to cancel)")
-	fmt.Println()
-
 	current := config.Model
 	if current == "" {
 		current = defaultModel
 	}
-	fmt.Printf("  \033[1;32m0)\033[0m %s (current)\n", current)
 
-	for i, m := range config.ModelHistory {
-		if i >= 9 {
-			break
-		}
-		fmt.Printf("  \033[1;33m%d)\033[0m %s\n", i+1, m)
-	}
-	fmt.Println()
-
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
-		fmt.Println("Error: terminal not supported")
+	if len(config.ModelHistory) == 0 {
+		fmt.Println(muted("No model history. Use: please -model <model-slug>"))
 		return
 	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState)
 
-	for {
-		var buf [1]byte
-		os.Stdin.Read(buf[:])
-		ch := buf[0]
+	selected := RunModelPicker("Select Model", config.ModelHistory, current)
 
-		if ch == 'q' || ch == 27 {
-			term.Restore(int(os.Stdin.Fd()), oldState)
-			fmt.Println("\nCancelled.")
-			return
-		}
-
-		if ch == '0' || ch == '\r' || ch == '\n' {
-			term.Restore(int(os.Stdin.Fd()), oldState)
-			fmt.Printf("\nKeeping: %s\n", current)
-			return
-		}
-
-		if ch >= '1' && ch <= '9' {
-			idx := int(ch - '1')
-			if idx < len(config.ModelHistory) {
-				term.Restore(int(os.Stdin.Fd()), oldState)
-				selected := config.ModelHistory[idx]
-				addModelToHistory(selected)
-				fmt.Printf("\nSwitched to: %s\n", selected)
-				return
-			}
-		}
+	if selected == "" {
+		fmt.Println(muted("Cancelled."))
+		return
 	}
+
+	addModelToHistory(selected)
+	fmt.Println(success("Switched to: " + selected))
 }
 
 func runRollback() {
@@ -1399,18 +1294,18 @@ func runRollback() {
 }
 
 func runReset() {
-	fmt.Println("\033[1;31m⚠ WARNING: This will completely wipe Please!\033[0m")
+	fmt.Println(errorStyle.Render("⚠ WARNING: This will completely wipe Please!"))
 	fmt.Println()
-	fmt.Println("This will delete:")
-	fmt.Println("  - All custom tools")
-	fmt.Println("  - Your configuration (API key, model settings)")
-	fmt.Println("  - All backups")
+	fmt.Println(muted("This will delete:"))
+	fmt.Println(muted("  - All custom tools"))
+	fmt.Println(muted("  - Your configuration (API key, model settings)"))
+	fmt.Println(muted("  - All backups"))
 	fmt.Println()
-	fmt.Println("Press \033[1m1\033[0m to confirm, any other key to cancel...")
+	fmt.Println("Press " + bold("1") + " to confirm, any other key to cancel...")
 
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
-		fmt.Println("Error: terminal not supported")
+		fmt.Println(errorf("Error: terminal not supported"))
 		return
 	}
 
@@ -1419,24 +1314,24 @@ func runReset() {
 	term.Restore(int(os.Stdin.Fd()), oldState)
 
 	if buf[0] != '1' {
-		fmt.Println("\nCancelled.")
+		fmt.Println(muted("\nCancelled."))
 		return
 	}
 
 	fmt.Println("1")
-	fmt.Print("\nType 'reset' and press Enter to confirm: ")
+	fmt.Print("\nType " + bold("reset") + " and press Enter to confirm: ")
 
 	reader := bufio.NewReader(os.Stdin)
 	input, _ := reader.ReadString('\n')
 	input = strings.TrimSpace(input)
 
 	if input != "reset" {
-		fmt.Println("Cancelled.")
+		fmt.Println(muted("Cancelled."))
 		return
 	}
 
 	fmt.Println()
-	fmt.Println("Resetting...")
+	fmt.Println(muted("Resetting..."))
 
 	// Remove config directory
 	if err := os.RemoveAll(configDir); err != nil {
@@ -1746,7 +1641,7 @@ func main() {
 		// Extract images from prompt and create appropriate message
 		cleanedPrompt, imagePaths := extractImagesFromPrompt(prompt)
 		if len(imagePaths) > 0 {
-			fmt.Printf("\033[90m> Attaching %d image(s)\033[0m\n", len(imagePaths))
+			fmt.Println(toolPrefixStyle.Render(fmt.Sprintf("> Attaching %d image(s)", len(imagePaths))))
 		}
 		messages = append(messages, createMultimodalMessage(cleanedPrompt, imagePaths))
 
@@ -1789,7 +1684,7 @@ func main() {
 		// Extract images from prompt
 		cleanedPrompt, imagePaths := extractImagesFromPrompt(prompt)
 		if len(imagePaths) > 0 {
-			fmt.Printf("\033[90m> Attaching %d image(s)\033[0m\n", len(imagePaths))
+			fmt.Println(toolPrefixStyle.Render(fmt.Sprintf("> Attaching %d image(s)", len(imagePaths))))
 		}
 
 		systemPrompt := fmt.Sprintf(`You are a helpful terminal assistant with full shell access.
